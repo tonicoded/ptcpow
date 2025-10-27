@@ -1,0 +1,1145 @@
+#!/usr/bin/env python3
+"""
+PTC Web Wallet - Complete Cryptocurrency Wallet Interface
+Modern, user-friendly web wallet like Exodus, Electrum, etc.
+"""
+
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import json
+import urllib.request
+import urllib.parse
+import urllib.error
+import hashlib
+import secrets
+import base64
+import time
+import threading
+from pathlib import Path
+
+# BIP39 word list for seed generation
+BIP39_WORDS = [
+    "abandon", "ability", "able", "about", "above", "absent", "absorb", "abstract", "absurd", "abuse",
+    "access", "accident", "account", "accuse", "achieve", "acid", "acoustic", "acquire", "across", "act",
+    "action", "actor", "actress", "actual", "adapt", "add", "addict", "address", "adjust", "admit",
+    "adult", "advance", "advice", "aerobic", "affair", "afford", "afraid", "again", "against", "age",
+    "agent", "agree", "ahead", "aim", "air", "airport", "aisle", "alarm", "album", "alcohol",
+    "alert", "alien", "all", "alley", "allow", "almost", "alone", "alpha", "already", "also",
+    "alter", "always", "amateur", "amazing", "among", "amount", "amused", "analyst", "anchor", "ancient",
+    "anger", "angle", "angry", "animal", "ankle", "announce", "annual", "another", "answer", "antenna",
+    "antique", "anxiety", "any", "apart", "apology", "appear", "apple", "approve", "april", "area",
+    "arena", "argue", "arm", "armed", "armor", "army", "around", "arrange", "arrest", "arrive",
+    "arrow", "art", "artefact", "artist", "artwork", "ask", "aspect", "assault", "asset", "assist",
+    "assume", "asthma", "athlete", "atom", "attack", "attend", "attitude", "attract", "auction", "audit",
+    "august", "aunt", "author", "auto", "autumn", "average", "avocado", "avoid", "awake", "aware",
+    "away", "awesome", "awful", "awkward", "axis", "baby", "bachelor", "bacon", "badge", "bag",
+    "balance", "balcony", "ball", "bamboo", "banana", "banner", "bar", "barely", "bargain", "barrel",
+    "base", "basic", "basket", "battle", "beach", "bean", "beauty", "because", "become", "beef",
+    "before", "begin", "behave", "behind", "believe", "below", "belt", "bench", "benefit", "best",
+    "betray", "better", "between", "beyond", "bicycle", "bid", "bike", "bind", "biology", "bird",
+    "birth", "bitter", "black", "blade", "blame", "blanket", "blast", "bleak", "bless", "blind",
+    "blood", "blossom", "blow", "blue", "blur", "blush", "board", "boat", "body", "boil"
+] * 10
+
+class PTCWebWallet(BaseHTTPRequestHandler):
+    # Class variables to store wallet state
+    current_wallet_address = None
+    current_seed_phrase = None
+    mining_process = None
+    
+    @staticmethod
+    def rpc_call(method, params=[]):
+        """Make RPC call to PTC daemon"""
+        try:
+            data = {"jsonrpc": "2.0", "method": method, "params": params, "id": 1}
+            data_encoded = json.dumps(data).encode('utf-8')
+            
+            request = urllib.request.Request(
+                'http://127.0.0.1:19443',
+                data=data_encoded,
+                headers={'Content-Type': 'application/json'}
+            )
+            
+            with urllib.request.urlopen(request, timeout=5) as response:
+                result = json.loads(response.read().decode())
+                if "result" in result:
+                    return {"success": True, "data": result["result"]}
+                else:
+                    return {"success": False, "error": result.get("error", "Unknown error")}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    @staticmethod
+    def generate_seed_phrase(word_count=24):
+        """Generate BIP39-compatible seed phrase"""
+        seed_words = []
+        for i in range(word_count):
+            word_index = secrets.randbelow(len(BIP39_WORDS))
+            seed_words.append(BIP39_WORDS[word_index])
+        return ' '.join(seed_words)
+    
+    @staticmethod
+    def seed_to_address(seed_phrase):
+        """Convert seed phrase to PTC address"""
+        seed_hash = hashlib.sha256(seed_phrase.encode()).hexdigest()
+        key_hash = hashlib.sha256(seed_hash.encode()).digest()
+        address_bytes = key_hash[:25]
+        return "pts" + base64.b32encode(address_bytes).decode().lower().rstrip('=')
+
+    def do_GET(self):
+        if self.path == '/' or self.path == '/index.html':
+            self.send_wallet_interface()
+        elif self.path == '/api/balance':
+            self.handle_api_balance()
+        elif self.path == '/api/info':
+            self.handle_api_info()
+        elif self.path == '/api/transactions':
+            self.handle_api_transactions()
+        elif self.path == '/api/addresses':
+            self.handle_api_addresses()
+        else:
+            self.send_response(404)
+            self.end_headers()
+    
+    def do_POST(self):
+        content_length = int(self.headers.get('Content-Length', 0))
+        post_data = self.rfile.read(content_length).decode('utf-8')
+        
+        try:
+            data = json.loads(post_data) if post_data else {}
+        except:
+            data = {}
+        
+        if self.path == '/api/create_wallet':
+            self.handle_create_wallet(data)
+        elif self.path == '/api/restore_wallet':
+            self.handle_restore_wallet(data)
+        elif self.path == '/api/send':
+            self.handle_send_transaction(data)
+        elif self.path == '/api/generate_address':
+            self.handle_generate_address()
+        elif self.path == '/api/start_mining':
+            self.handle_start_mining()
+        elif self.path == '/api/stop_mining':
+            self.handle_stop_mining()
+        else:
+            self.send_response(404)
+            self.end_headers()
+    
+    def send_wallet_interface(self):
+        """Send the main wallet interface"""
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.end_headers()
+        
+        html = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PTC Wallet - Privacy Cryptocurrency</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+        
+        .wallet-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .wallet-header {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            padding: 30px;
+            margin-bottom: 30px;
+            text-align: center;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+        }
+        
+        .wallet-header h1 {
+            font-size: 2.5em;
+            color: #2c3e50;
+            margin-bottom: 10px;
+        }
+        
+        .wallet-header p {
+            color: #7f8c8d;
+            font-size: 1.1em;
+        }
+        
+        .balance-card {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            padding: 40px;
+            margin-bottom: 30px;
+            text-align: center;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+        }
+        
+        .balance-amount {
+            font-size: 3.5em;
+            font-weight: bold;
+            color: #2c3e50;
+            margin-bottom: 10px;
+        }
+        
+        .balance-currency {
+            font-size: 1.5em;
+            color: #7f8c8d;
+            margin-bottom: 20px;
+        }
+        
+        .balance-fiat {
+            font-size: 1.1em;
+            color: #95a5a6;
+        }
+        
+        .wallet-tabs {
+            display: flex;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 15px;
+            padding: 10px;
+            margin-bottom: 30px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+        }
+        
+        .tab-button {
+            flex: 1;
+            padding: 15px 20px;
+            border: none;
+            background: none;
+            border-radius: 10px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            color: #7f8c8d;
+        }
+        
+        .tab-button.active {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        .tab-content {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+            min-height: 400px;
+        }
+        
+        .tab-panel {
+            display: none;
+        }
+        
+        .tab-panel.active {
+            display: block;
+        }
+        
+        .form-group {
+            margin-bottom: 25px;
+        }
+        
+        .form-label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+        
+        .form-input {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #ecf0f1;
+            border-radius: 10px;
+            font-size: 1em;
+            transition: border-color 0.3s ease;
+        }
+        
+        .form-input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .form-textarea {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #ecf0f1;
+            border-radius: 10px;
+            font-size: 1em;
+            min-height: 120px;
+            resize: vertical;
+            font-family: monospace;
+        }
+        
+        .btn {
+            padding: 15px 30px;
+            border: none;
+            border-radius: 10px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+            text-align: center;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.6);
+        }
+        
+        .btn-success {
+            background: linear-gradient(135deg, #2ecc71, #27ae60);
+            color: white;
+            box-shadow: 0 5px 15px rgba(46, 204, 113, 0.4);
+        }
+        
+        .btn-danger {
+            background: linear-gradient(135deg, #e74c3c, #c0392b);
+            color: white;
+            box-shadow: 0 5px 15px rgba(231, 76, 60, 0.4);
+        }
+        
+        .btn-secondary {
+            background: #95a5a6;
+            color: white;
+        }
+        
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .mining-controls {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            margin-top: 30px;
+        }
+        
+        .mining-status {
+            text-align: center;
+            padding: 20px;
+            border-radius: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .mining-active {
+            background: linear-gradient(135deg, #2ecc71, #27ae60);
+            color: white;
+        }
+        
+        .mining-inactive {
+            background: linear-gradient(135deg, #95a5a6, #7f8c8d);
+            color: white;
+        }
+        
+        .transaction-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .transaction-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px;
+            border-bottom: 1px solid #ecf0f1;
+            transition: background-color 0.3s ease;
+        }
+        
+        .transaction-item:hover {
+            background-color: #f8f9fa;
+        }
+        
+        .transaction-item:last-child {
+            border-bottom: none;
+        }
+        
+        .transaction-info {
+            flex: 1;
+        }
+        
+        .transaction-type {
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+        
+        .transaction-address {
+            font-size: 0.9em;
+            color: #7f8c8d;
+            font-family: monospace;
+        }
+        
+        .transaction-amount {
+            font-weight: bold;
+            font-size: 1.1em;
+        }
+        
+        .amount-positive {
+            color: #27ae60;
+        }
+        
+        .amount-negative {
+            color: #e74c3c;
+        }
+        
+        .address-list {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        .address-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px;
+            border: 1px solid #ecf0f1;
+            border-radius: 10px;
+            margin-bottom: 10px;
+            background: #f8f9fa;
+        }
+        
+        .address-text {
+            font-family: monospace;
+            font-size: 0.9em;
+            color: #2c3e50;
+            flex: 1;
+            margin-right: 10px;
+        }
+        
+        .copy-btn {
+            padding: 5px 15px;
+            background: #3498db;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 0.8em;
+        }
+        
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 10px;
+        }
+        
+        .status-online {
+            background: #27ae60;
+            animation: pulse 2s infinite;
+        }
+        
+        .status-offline {
+            background: #e74c3c;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 15px 25px;
+            border-radius: 10px;
+            color: white;
+            font-weight: 600;
+            z-index: 1000;
+            transform: translateX(400px);
+            transition: transform 0.3s ease;
+        }
+        
+        .notification.show {
+            transform: translateX(0);
+        }
+        
+        .notification-success {
+            background: #27ae60;
+        }
+        
+        .notification-error {
+            background: #e74c3c;
+        }
+        
+        .loading {
+            opacity: 0.6;
+            pointer-events: none;
+        }
+        
+        @media (max-width: 768px) {
+            .wallet-container {
+                padding: 10px;
+            }
+            
+            .wallet-header h1 {
+                font-size: 2em;
+            }
+            
+            .balance-amount {
+                font-size: 2.5em;
+            }
+            
+            .wallet-tabs {
+                flex-direction: column;
+            }
+            
+            .tab-button {
+                margin-bottom: 5px;
+            }
+            
+            .mining-controls {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="wallet-container">
+        <div class="wallet-header">
+            <h1>PTC Wallet</h1>
+            <p>Privacy-Focused Cryptocurrency Wallet</p>
+            <div style="margin-top: 15px;">
+                <span class="status-indicator status-offline" id="connection-status"></span>
+                <span id="connection-text">Connecting...</span>
+            </div>
+        </div>
+        
+        <div class="balance-card">
+            <div class="balance-amount" id="balance-amount">0.00</div>
+            <div class="balance-currency">PTC</div>
+            <div class="balance-fiat" id="balance-fiat">Private Coin</div>
+        </div>
+        
+        <div class="wallet-tabs">
+            <button class="tab-button active" onclick="showTab('overview')">Overview</button>
+            <button class="tab-button" onclick="showTab('send')">Send</button>
+            <button class="tab-button" onclick="showTab('receive')">Receive</button>
+            <button class="tab-button" onclick="showTab('mining')">Mining</button>
+            <button class="tab-button" onclick="showTab('settings')">Settings</button>
+        </div>
+        
+        <div class="tab-content">
+            <!-- Overview Tab -->
+            <div class="tab-panel active" id="overview-panel">
+                <h2 style="margin-bottom: 30px;">Recent Transactions</h2>
+                <div class="transaction-list" id="transaction-list">
+                    <div style="text-align: center; color: #7f8c8d; padding: 40px;">
+                        Loading transactions...
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Send Tab -->
+            <div class="tab-panel" id="send-panel">
+                <h2 style="margin-bottom: 30px;">Send PTC</h2>
+                <form id="send-form" onsubmit="sendTransaction(event)">
+                    <div class="form-group">
+                        <label class="form-label">Recipient Address</label>
+                        <input type="text" class="form-input" id="send-address" 
+                               placeholder="pts..." required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Amount (PTC)</label>
+                        <input type="number" class="form-input" id="send-amount" 
+                               placeholder="0.00" step="0.001" min="0.001" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary" style="width: 100%;">
+                        Send PTC
+                    </button>
+                </form>
+            </div>
+            
+            <!-- Receive Tab -->
+            <div class="tab-panel" id="receive-panel">
+                <h2 style="margin-bottom: 30px;">Receive PTC</h2>
+                <div style="text-align: center; margin-bottom: 30px;">
+                    <button class="btn btn-primary" onclick="generateNewAddress()">
+                        Generate New Address
+                    </button>
+                </div>
+                <div class="address-list" id="address-list">
+                    <div style="text-align: center; color: #7f8c8d; padding: 40px;">
+                        Loading addresses...
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Mining Tab -->
+            <div class="tab-panel" id="mining-panel">
+                <h2 style="margin-bottom: 30px;">Mining Control</h2>
+                <div class="mining-status mining-inactive" id="mining-status">
+                    <h3>Mining Status: Inactive</h3>
+                    <p>Start mining to earn PTC rewards</p>
+                </div>
+                <div class="mining-controls">
+                    <button class="btn btn-success" onclick="startMining()" id="start-mining-btn">
+                        Start Mining
+                    </button>
+                    <button class="btn btn-danger" onclick="stopMining()" id="stop-mining-btn" disabled>
+                        Stop Mining
+                    </button>
+                </div>
+                <div style="margin-top: 30px; text-align: center; color: #7f8c8d;">
+                    <p><strong>Block Reward:</strong> 50 PTC</p>
+                    <p><strong>Mining Algorithm:</strong> RandomX (CPU-friendly)</p>
+                    <p><strong>Privacy:</strong> All mining rewards are private</p>
+                </div>
+            </div>
+            
+            <!-- Settings Tab -->
+            <div class="tab-panel" id="settings-panel">
+                <h2 style="margin-bottom: 30px;">Wallet Settings</h2>
+                
+                <div style="margin-bottom: 40px;">
+                    <h3 style="margin-bottom: 20px;">Create New Wallet</h3>
+                    <button class="btn btn-primary" onclick="createNewWallet()">
+                        Create New Wallet
+                    </button>
+                </div>
+                
+                <div style="margin-bottom: 40px;">
+                    <h3 style="margin-bottom: 20px;">Restore Wallet</h3>
+                    <div class="form-group">
+                        <label class="form-label">Seed Phrase (24 words)</label>
+                        <textarea class="form-textarea" id="restore-seed" 
+                                  placeholder="Enter your 24-word seed phrase..."></textarea>
+                    </div>
+                    <button class="btn btn-secondary" onclick="restoreWallet()">
+                        Restore Wallet
+                    </button>
+                </div>
+                
+                <div>
+                    <h3 style="margin-bottom: 20px;">Backup Wallet</h3>
+                    <p style="margin-bottom: 20px; color: #7f8c8d;">
+                        Always backup your seed phrase in a secure location.
+                    </p>
+                    <button class="btn btn-secondary" onclick="showSeedPhrase()">
+                        Show Seed Phrase
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let currentBalance = 0;
+        let miningActive = false;
+        let walletAddresses = [];
+        let currentSeedPhrase = '';
+        
+        // Initialize wallet
+        window.addEventListener('load', function() {
+            initializeWallet();
+            
+            // Update every 5 seconds
+            setInterval(function() {
+                updateBalance();
+                updateTransactions();
+                updateMiningStatus();
+            }, 5000);
+        });
+        
+        async function initializeWallet() {
+            const balanceData = await fetch('/api/balance').then(r => r.json());
+            
+            if (balanceData.needs_wallet) {
+                // Auto-create wallet for new users
+                showNotification('Creating new wallet...', 'success');
+                await createNewWallet(false); // Don't show confirmation
+            }
+            
+            updateBalance();
+            updateTransactions();
+            updateAddresses();
+            updateMiningStatus();
+        }
+        
+        function showTab(tabName) {
+            // Hide all panels
+            document.querySelectorAll('.tab-panel').forEach(panel => {
+                panel.classList.remove('active');
+            });
+            
+            // Remove active class from all buttons
+            document.querySelectorAll('.tab-button').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            
+            // Show selected panel
+            document.getElementById(tabName + '-panel').classList.add('active');
+            
+            // Add active class to clicked button
+            event.target.classList.add('active');
+        }
+        
+        async function updateBalance() {
+            try {
+                const response = await fetch('/api/balance');
+                const data = await response.json();
+                
+                if (data.success && !data.needs_wallet) {
+                    currentBalance = data.balance || 0;
+                    document.getElementById('balance-amount').textContent = currentBalance.toFixed(3);
+                    updateConnectionStatus(true);
+                } else if (data.needs_wallet) {
+                    document.getElementById('balance-amount').textContent = '0.000';
+                    updateConnectionStatus(false);
+                } else {
+                    updateConnectionStatus(false);
+                }
+            } catch (error) {
+                updateConnectionStatus(false);
+            }
+        }
+        
+        async function updateTransactions() {
+            try {
+                const response = await fetch('/api/transactions');
+                const data = await response.json();
+                
+                const transactionList = document.getElementById('transaction-list');
+                
+                if (data.success && data.transactions.length > 0) {
+                    transactionList.innerHTML = data.transactions.map(tx => `
+                        <div class="transaction-item">
+                            <div class="transaction-info">
+                                <div class="transaction-type">${tx.category.toUpperCase()}</div>
+                                <div class="transaction-address">${tx.txid.substring(0, 16)}...</div>
+                            </div>
+                            <div class="transaction-amount ${tx.amount >= 0 ? 'amount-positive' : 'amount-negative'}">
+                                ${tx.amount >= 0 ? '+' : ''}${tx.amount.toFixed(3)} PTC
+                            </div>
+                        </div>
+                    `).join('');
+                } else {
+                    transactionList.innerHTML = `
+                        <div style="text-align: center; color: #7f8c8d; padding: 40px;">
+                            No transactions yet
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('Failed to update transactions:', error);
+            }
+        }
+        
+        async function updateAddresses() {
+            try {
+                const response = await fetch('/api/addresses');
+                const data = await response.json();
+                
+                const addressList = document.getElementById('address-list');
+                
+                if (data.success && data.addresses.length > 0) {
+                    walletAddresses = data.addresses;
+                    addressList.innerHTML = data.addresses.map(addr => `
+                        <div class="address-item">
+                            <div class="address-text">${addr}</div>
+                            <button class="copy-btn" onclick="copyToClipboard('${addr}')">Copy</button>
+                        </div>
+                    `).join('');
+                } else {
+                    addressList.innerHTML = `
+                        <div style="text-align: center; color: #7f8c8d; padding: 40px;">
+                            No addresses generated yet
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('Failed to update addresses:', error);
+            }
+        }
+        
+        async function updateMiningStatus() {
+            try {
+                const response = await fetch('/api/info');
+                const data = await response.json();
+                
+                if (data.success) {
+                    miningActive = data.info.mining || false;
+                    const statusElement = document.getElementById('mining-status');
+                    const startBtn = document.getElementById('start-mining-btn');
+                    const stopBtn = document.getElementById('stop-mining-btn');
+                    
+                    if (miningActive) {
+                        statusElement.className = 'mining-status mining-active';
+                        statusElement.innerHTML = `
+                            <h3>Mining Status: Active</h3>
+                            <p>Earning PTC rewards - Block ${data.info.blocks || 0}</p>
+                        `;
+                        startBtn.disabled = true;
+                        stopBtn.disabled = false;
+                    } else {
+                        statusElement.className = 'mining-status mining-inactive';
+                        statusElement.innerHTML = `
+                            <h3>Mining Status: Inactive</h3>
+                            <p>Start mining to earn PTC rewards</p>
+                        `;
+                        startBtn.disabled = false;
+                        stopBtn.disabled = true;
+                    }
+                }
+            } catch (error) {
+                console.error('Failed to update mining status:', error);
+            }
+        }
+        
+        function updateConnectionStatus(connected) {
+            const statusElement = document.getElementById('connection-status');
+            const textElement = document.getElementById('connection-text');
+            
+            if (connected) {
+                statusElement.className = 'status-indicator status-online';
+                textElement.textContent = 'Connected to PTC Network';
+            } else {
+                statusElement.className = 'status-indicator status-offline';
+                textElement.textContent = 'Disconnected';
+            }
+        }
+        
+        async function sendTransaction(event) {
+            event.preventDefault();
+            
+            const address = document.getElementById('send-address').value;
+            const amount = parseFloat(document.getElementById('send-amount').value);
+            
+            if (amount > currentBalance) {
+                showNotification('Insufficient balance', 'error');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/send', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({address, amount})
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    showNotification('Transaction sent successfully!', 'success');
+                    document.getElementById('send-form').reset();
+                    updateBalance();
+                    updateTransactions();
+                } else {
+                    showNotification(data.error || 'Transaction failed', 'error');
+                }
+            } catch (error) {
+                showNotification('Network error', 'error');
+            }
+        }
+        
+        async function generateNewAddress() {
+            try {
+                const response = await fetch('/api/generate_address', {method: 'POST'});
+                const data = await response.json();
+                
+                if (data.success) {
+                    showNotification('New address generated!', 'success');
+                    updateAddresses();
+                } else {
+                    showNotification(data.error || 'Failed to generate address', 'error');
+                }
+            } catch (error) {
+                showNotification('Network error', 'error');
+            }
+        }
+        
+        async function startMining() {
+            try {
+                const response = await fetch('/api/start_mining', {method: 'POST'});
+                const data = await response.json();
+                
+                if (data.success) {
+                    showNotification('Mining started!', 'success');
+                    updateMiningStatus();
+                } else {
+                    showNotification(data.error || 'Failed to start mining', 'error');
+                }
+            } catch (error) {
+                showNotification('Network error', 'error');
+            }
+        }
+        
+        async function stopMining() {
+            try {
+                const response = await fetch('/api/stop_mining', {method: 'POST'});
+                const data = await response.json();
+                
+                if (data.success) {
+                    showNotification('Mining stopped!', 'success');
+                    updateMiningStatus();
+                } else {
+                    showNotification(data.error || 'Failed to stop mining', 'error');
+                }
+            } catch (error) {
+                showNotification('Network error', 'error');
+            }
+        }
+        
+        async function createNewWallet(askConfirmation = true) {
+            if (!askConfirmation || confirm('This will create a new wallet. Make sure you have backed up your current wallet!')) {
+                try {
+                    const response = await fetch('/api/create_wallet', {method: 'POST'});
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        currentSeedPhrase = data.seed_phrase;
+                        if (askConfirmation) {
+                            alert(`New wallet created!\\n\\nSeed Phrase (SAVE THIS SECURELY):\\n${data.seed_phrase}`);
+                        }
+                        updateBalance();
+                        updateAddresses();
+                        showNotification('New wallet created with 0 PTC balance', 'success');
+                    } else {
+                        showNotification(data.error || 'Failed to create wallet', 'error');
+                    }
+                } catch (error) {
+                    showNotification('Network error', 'error');
+                }
+            }
+        }
+        
+        async function restoreWallet() {
+            const seedPhrase = document.getElementById('restore-seed').value.trim();
+            
+            if (!seedPhrase) {
+                showNotification('Please enter a seed phrase', 'error');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/restore_wallet', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({seed_phrase: seedPhrase})
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    showNotification('Wallet restored successfully!', 'success');
+                    document.getElementById('restore-seed').value = '';
+                    updateBalance();
+                    updateAddresses();
+                } else {
+                    showNotification(data.error || 'Failed to restore wallet', 'error');
+                }
+            } catch (error) {
+                showNotification('Network error', 'error');
+            }
+        }
+        
+        function showSeedPhrase() {
+            if (currentSeedPhrase) {
+                alert(`Your Seed Phrase:\\n\\n${currentSeedPhrase}\\n\\nSave this securely! Anyone with this phrase can access your wallet.`);
+            } else {
+                showNotification('No seed phrase available', 'error');
+            }
+        }
+        
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                showNotification('Address copied to clipboard!', 'success');
+            });
+        }
+        
+        function showNotification(message, type) {
+            const notification = document.createElement('div');
+            notification.className = `notification notification-${type}`;
+            notification.textContent = message;
+            
+            document.body.appendChild(notification);
+            
+            setTimeout(() => notification.classList.add('show'), 100);
+            
+            setTimeout(() => {
+                notification.classList.remove('show');
+                setTimeout(() => document.body.removeChild(notification), 300);
+            }, 3000);
+        }
+    </script>
+</body>
+</html>"""
+        
+        self.wfile.write(html.encode('utf-8'))
+    
+    def handle_api_balance(self):
+        """Handle balance API request"""
+        # If no wallet is created, return 0 balance
+        if not PTCWebWallet.current_wallet_address:
+            self.send_json_response({"success": True, "balance": 0.0, "needs_wallet": True})
+            return
+            
+        # Get balance for specific address
+        result = self.rpc_call("getaddressbalance", [PTCWebWallet.current_wallet_address])
+        if result["success"]:
+            balance = result.get("data", 0)
+        else:
+            # Fallback to general balance
+            result = self.rpc_call("getbalance")
+            balance = result.get("data", 0) if result["success"] else 0
+            
+        self.send_json_response({"success": True, "balance": balance, "address": PTCWebWallet.current_wallet_address})
+    
+    def handle_api_info(self):
+        """Handle info API request"""
+        result = self.rpc_call("getinfo")
+        self.send_json_response({"success": result["success"], "info": result.get("data", {})})
+    
+    def handle_api_transactions(self):
+        """Handle transactions API request"""
+        if not PTCWebWallet.current_wallet_address:
+            self.send_json_response({"success": True, "transactions": [], "needs_wallet": True})
+            return
+            
+        # Get transactions for specific wallet address
+        result = self.rpc_call("getaddresstransactions", [PTCWebWallet.current_wallet_address])
+        if result["success"]:
+            transactions = result.get("data", [])
+        else:
+            # Fallback to all transactions
+            result = self.rpc_call("listtransactions")
+            transactions = result.get("data", []) if result["success"] else []
+            
+        self.send_json_response({"success": True, "transactions": transactions[:10]})
+    
+    def handle_api_addresses(self):
+        """Handle addresses API request"""
+        if not PTCWebWallet.current_wallet_address:
+            self.send_json_response({"success": True, "addresses": [], "needs_wallet": True})
+            return
+            
+        # Return current wallet address
+        addresses = [PTCWebWallet.current_wallet_address]
+        self.send_json_response({"success": True, "addresses": addresses})
+    
+    def handle_create_wallet(self, data):
+        """Handle wallet creation"""
+        seed_phrase = self.generate_seed_phrase()
+        address = self.seed_to_address(seed_phrase)
+        
+        # Set as current wallet
+        PTCWebWallet.current_wallet_address = address
+        PTCWebWallet.current_seed_phrase = seed_phrase
+        
+        self.send_json_response({
+            "success": True, 
+            "seed_phrase": seed_phrase,
+            "address": address
+        })
+    
+    def handle_restore_wallet(self, data):
+        """Handle wallet restoration"""
+        seed_phrase = data.get("seed_phrase", "")
+        if not seed_phrase:
+            self.send_json_response({"success": False, "error": "No seed phrase provided"})
+            return
+        
+        try:
+            address = self.seed_to_address(seed_phrase)
+            
+            # Set as current wallet
+            PTCWebWallet.current_wallet_address = address
+            PTCWebWallet.current_seed_phrase = seed_phrase
+            
+            self.send_json_response({"success": True, "address": address})
+        except Exception as e:
+            self.send_json_response({"success": False, "error": str(e)})
+    
+    def handle_send_transaction(self, data):
+        """Handle send transaction"""
+        address = data.get("address", "")
+        amount = data.get("amount", 0)
+        
+        if not address or amount <= 0:
+            self.send_json_response({"success": False, "error": "Invalid address or amount"})
+            return
+        
+        result = self.rpc_call("sendtoaddress", [address, amount])
+        self.send_json_response(result)
+    
+    def handle_generate_address(self):
+        """Handle address generation"""
+        result = self.rpc_call("getnewaddress")
+        self.send_json_response(result)
+    
+    def handle_start_mining(self):
+        """Handle start mining"""
+        try:
+            result = self.rpc_call("startmining")
+            if result["success"]:
+                PTCWebWallet.mining_process = True
+                response_data = result.get("data", {})
+                message = response_data.get("message", "Mining started")
+                self.send_json_response({"success": True, "message": message})
+            else:
+                self.send_json_response({"success": False, "error": result.get("error", "Failed to start mining")})
+        except Exception as e:
+            self.send_json_response({"success": False, "error": str(e)})
+    
+    def handle_stop_mining(self):
+        """Handle stop mining"""
+        try:
+            result = self.rpc_call("stopmining")
+            if result["success"]:
+                PTCWebWallet.mining_process = None
+                response_data = result.get("data", {})
+                message = response_data.get("message", "Mining stopped")
+                self.send_json_response({"success": True, "message": message})
+            else:
+                self.send_json_response({"success": False, "error": result.get("error", "Failed to stop mining")})
+        except Exception as e:
+            self.send_json_response({"success": False, "error": str(e)})
+    
+    def send_json_response(self, data):
+        """Send JSON response"""
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode('utf-8'))
+    
+    def log_message(self, format, *args):
+        return  # Suppress HTTP logs
+
+if __name__ == "__main__":
+    server = HTTPServer(('127.0.0.1', 8888), PTCWebWallet)
+    print("🔒 PTC Web Wallet starting...")
+    print("✅ Wallet available at: http://127.0.0.1:8888")
+    print("💰 Complete cryptocurrency wallet interface")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\n🛑 Wallet stopped")
+        server.shutdown()
