@@ -845,15 +845,26 @@ class PTCWebWallet(BaseHTTPRequestHandler):
     
     def handle_send_transaction(self, data):
         """Handle send transaction"""
-        address = data.get("address", "")
-        amount = data.get("amount", 0)
+        to_address = data.get("address", "")
+        amount = float(data.get("amount", 0))
         
-        if not address or amount <= 0:
+        if not to_address or amount <= 0:
             self.send_json_response({"success": False, "error": "Invalid address or amount"})
             return
         
-        result = self.rpc_call("sendtoaddress", [address, amount])
-        self.send_json_response(result)
+        if not PTCWebWallet.current_wallet_address:
+            self.send_json_response({"success": False, "error": "No wallet loaded"})
+            return
+        
+        try:
+            # Use sendfrom to send from the current wallet address
+            result = self.rpc_call("sendfrom", [PTCWebWallet.current_wallet_address, to_address, amount])
+            if result.get("success", True):
+                self.send_json_response({"success": True, "txid": result.get("data", result)})
+            else:
+                self.send_json_response({"success": False, "error": result.get("error", "Transaction failed")})
+        except Exception as e:
+            self.send_json_response({"success": False, "error": str(e)})
     
     def handle_generate_address(self):
         """Handle address generation"""

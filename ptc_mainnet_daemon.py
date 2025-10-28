@@ -650,6 +650,27 @@ class MainnetRPCServer:
             else:
                 raise Exception("Invalid parameters")
         
+        elif method == "sendfrom":
+            if len(params) >= 3:
+                from_address = params[0]
+                to_address = params[1]
+                amount = float(params[2])
+                
+                # Check if from_address has sufficient balance
+                if self.blockchain.get_address_balance(from_address) >= amount + 0.001:
+                    tx = self.blockchain.create_transaction(from_address, to_address, amount)
+                    if tx:
+                        # Add transaction to pending pool (for demo, we'll mine it immediately)
+                        new_block = self.blockchain.mine_new_block([tx])
+                        if self.blockchain.add_block(new_block):
+                            return tx.txid
+                    
+                    raise Exception("Failed to create transaction")
+                else:
+                    raise Exception(f"Insufficient balance. Address {from_address} has {self.blockchain.get_address_balance(from_address)} PTC, need {amount + 0.001} PTC")
+            else:
+                raise Exception("Invalid parameters")
+        
         elif method == "listtransactions":
             # Get transactions involving wallet addresses
             addresses = self.blockchain.get_wallet_addresses()
