@@ -1,0 +1,83 @@
+# Build directories
+build/
+.libs/
+src/*.a
+src/*.o
+src/obj/
+src/obj-test/
+src/test/test_ptc
+src/test/test_ptc.exe
+
+# Dependencies
+src/leveldb/
+src/secp256k1/
+src/univalue/
+
+# Generated files
+src/config/
+src/stamp-h1
+libtool
+Makefile
+configure
+config.log
+config.status
+autom4te.cache/
+
+# Qt generated files
+src/qt/moc_*.cpp
+src/qt/forms/ui_*.h
+src/qt/qrc_*.cpp
+src/qt/test/moc_*.cpp
+*.qm
+
+# Wallet data
+wallet.dat
+testnet3/
+regtest/
+signet/
+.cookie
+debug.log
+fee_estimates.dat
+mempool.dat
+peers.dat
+banlist.dat
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Crypto libraries
+cryptonote/
+randomx/
+
+# Personal files
+private_keys/
+*.key
+*.pem
+
+# PTC Runtime Data
+*.db
+*.sqlite
+real_ptc_data/
+testnet_data/
+ptc_mainnet/
+build_real/
+test_data/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Logs and temporary files
+*.log
+nohup.out
+*.tmp

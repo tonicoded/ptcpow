@@ -732,6 +732,17 @@ class MainnetRPCServer:
             else:
                 return {"message": "Mining already inactive", "status": "info"}
         
+        elif method == "setminingaddress":
+            if not params or len(params) < 1:
+                raise Exception("Missing address parameter")
+            
+            address = params[0]
+            self.miner.set_mining_address(address)
+            return {"message": f"Mining address set to {address}", "status": "success"}
+        
+        elif method == "getminingaddress":
+            return {"address": self.miner.mining_address}
+        
         else:
             raise Exception(f"Unknown method: {method}")
 
