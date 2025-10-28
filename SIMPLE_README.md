@@ -4,10 +4,25 @@
 
 ## ⚡ Super Simple Setup
 
+### Windows:
+```cmd
+git clone https://github.com/tonicoded/ptcpow.git
+cd ptcpow
+start_ptc.bat
+```
+
+### Mac/Linux:
 ```bash
 git clone https://github.com/tonicoded/ptcpow.git
 cd ptcpow
 ./start_ptc.sh
+```
+
+### Universal (Any OS):
+```bash
+git clone https://github.com/tonicoded/ptcpow.git
+cd ptcpow
+python start_ptc.py
 ```
 
 **That's it!** You're now connected to the global PTC network! 🎉
