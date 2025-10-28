@@ -19,13 +19,13 @@ import base64
 import secrets
 from pathlib import Path
 
-# Import network synchronization
+# Import global network
 try:
-    from ptc_network_sync import PTCNetworkSync
-    NETWORK_SYNC_AVAILABLE = True
+    from ptc_global_network import PTCGlobalNetwork
+    GLOBAL_NETWORK_AVAILABLE = True
 except ImportError:
-    NETWORK_SYNC_AVAILABLE = False
-    logger.warning("Network sync not available")
+    GLOBAL_NETWORK_AVAILABLE = False
+    logger.warning("Global network not available")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -827,13 +827,13 @@ class PTCMainnetDaemon:
         self.miner = MainnetMiner(self.blockchain)
         self.rpc_server = MainnetRPCServer(self.blockchain, self.miner)
         
-        # Initialize network synchronization
-        if NETWORK_SYNC_AVAILABLE:
-            self.network_sync = PTCNetworkSync(rpc_port=19443)
-            logger.info("🌐 Network sync initialized")
+        # Initialize global network connection
+        if GLOBAL_NETWORK_AVAILABLE:
+            self.global_network = PTCGlobalNetwork(rpc_port=19443)
+            logger.info("🌐 Global PTC network initialized")
         else:
-            self.network_sync = None
-            logger.warning("⚠️  Running without network sync")
+            self.global_network = None
+            logger.warning("⚠️  Running without global network")
         
         # Create initial wallet address if none exist
         if not self.blockchain.get_wallet_addresses():
@@ -846,10 +846,10 @@ class PTCMainnetDaemon:
         """Start the mainnet daemon"""
         logger.info("🔧 Starting PTC Mainnet services...")
         
-        # Start network synchronization
-        if self.network_sync:
-            self.network_sync.start_sync()
-            logger.info("🌐 Network sync started - connecting to PTC network")
+        # Connect to global PTC network
+        if self.global_network:
+            self.global_network.start()
+            logger.info("🌐 Connecting to global PTC network...")
         
         # Start mining
         self.miner.start_mining()
@@ -865,9 +865,14 @@ class PTCMainnetDaemon:
         logger.info(f"   Mining Difficulty: {self.blockchain.get_difficulty():,}")
         logger.info(f"   Block Reward: {self.blockchain.get_current_block_reward()} PTC")
         logger.info(f"   RPC Server: http://127.0.0.1:19443")
-        if self.network_sync:
-            status = self.network_sync.get_network_status()
-            logger.info(f"   Network Peers: {status['active_peers']}/{status['peer_count']}")
+        if self.global_network:
+            # Give network time to connect
+            time.sleep(2)
+            status = self.global_network.get_network_status()
+            if status["connected"]:
+                logger.info(f"   Global Network: ✅ Connected ({status['peers']} peers)")
+            else:
+                logger.info(f"   Global Network: 🔄 Connecting...")
         logger.info("🔒 Privacy Features: Ring Signatures ✅ Bulletproofs ✅ Stealth Addresses ✅")
         logger.info("")
         logger.info("🌐 PTC MAINNET IS LIVE!")
@@ -877,8 +882,8 @@ class PTCMainnetDaemon:
         except KeyboardInterrupt:
             logger.info("\n🛑 Stopping PTC Mainnet Daemon...")
             self.miner.stop_mining()
-            if self.network_sync:
-                self.network_sync.stop()
+            if self.global_network:
+                self.global_network.stop()
             httpd.shutdown()
             logger.info("✅ PTC Mainnet Daemon stopped")
 
