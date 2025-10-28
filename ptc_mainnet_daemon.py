@@ -772,8 +772,143 @@ class MainnetRPCServer:
         elif method == "getminingaddress":
             return {"address": self.miner.mining_address}
         
+        elif method == "getblockchain":
+            # Return entire blockchain for sync
+            return self._get_full_blockchain()
+        
+        elif method == "getblocks":
+            # Get blocks from specific height
+            start_height = params[0] if params else 0
+            return self._get_blocks_from_height(start_height)
+        
+        elif method == "submitblock":
+            # Accept block from peer
+            if params and len(params) > 0:
+                block_data = params[0]
+                return self._submit_external_block(block_data)
+            else:
+                raise Exception("No block data provided")
+        
         else:
             raise Exception(f"Unknown method: {method}")
+    
+    def _get_full_blockchain(self):
+        """Get entire blockchain for sync"""
+        conn = sqlite3.connect(str(self.blockchain.db_path), timeout=30.0)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT height, hash, prev_hash, timestamp, difficulty, nonce, block_data
+            FROM blocks ORDER BY height ASC
+        ''')
+        
+        blocks = []
+        for row in cursor.fetchall():
+            # Parse block_data to get transactions
+            try:
+                block_data = json.loads(row[6]) if row[6] else {}
+                transactions = block_data.get("transactions", [])
+            except:
+                transactions = []
+                
+            blocks.append({
+                "height": row[0],
+                "hash": row[1], 
+                "previous_hash": row[2],  # prev_hash -> previous_hash for API consistency
+                "timestamp": row[3],
+                "difficulty": row[4],
+                "nonce": row[5],
+                "transactions": transactions
+            })
+            
+        conn.close()
+        return {"blocks": blocks, "height": len(blocks)}
+    
+    def _get_blocks_from_height(self, start_height: int):
+        """Get blocks from specific height"""
+        conn = sqlite3.connect(str(self.blockchain.db_path), timeout=30.0)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT height, hash, prev_hash, timestamp, difficulty, nonce, block_data
+            FROM blocks WHERE height >= ? ORDER BY height ASC
+        ''', (start_height,))
+        
+        blocks = []
+        for row in cursor.fetchall():
+            # Parse block_data to get transactions
+            try:
+                block_data = json.loads(row[6]) if row[6] else {}
+                transactions = block_data.get("transactions", [])
+            except:
+                transactions = []
+                
+            blocks.append({
+                "height": row[0],
+                "hash": row[1],
+                "previous_hash": row[2],  # prev_hash -> previous_hash for API consistency
+                "timestamp": row[3],
+                "difficulty": row[4],
+                "nonce": row[5],
+                "transactions": transactions
+            })
+            
+        conn.close()
+        return {"blocks": blocks}
+    
+    def _submit_external_block(self, block_data: dict):
+        """Submit block from external peer"""
+        try:
+            # Validate and add block to local chain
+            height = block_data.get("height")
+            block_hash = block_data.get("hash")
+            previous_hash = block_data.get("previous_hash")
+            timestamp = block_data.get("timestamp")
+            difficulty = block_data.get("difficulty")
+            nonce = block_data.get("nonce")
+            transactions = block_data.get("transactions", [])
+            
+            # Check if we already have this block
+            if self.blockchain.get_height() >= height:
+                return {"success": False, "error": "Block already exists"}
+            
+            # Add block to database
+            conn = sqlite3.connect(str(self.blockchain.db_path), timeout=30.0)
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                INSERT OR REPLACE INTO blocks 
+                (height, hash, prev_hash, timestamp, difficulty, nonce, block_data)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (height, block_hash, previous_hash, timestamp, difficulty, nonce, 
+                  json.dumps({"transactions": transactions})))
+            
+            # Update UTXOs for transactions
+            for tx in transactions:
+                # Add outputs as new UTXOs
+                for i, output in enumerate(tx.get("outputs", [])):
+                    cursor.execute('''
+                        INSERT OR REPLACE INTO utxos 
+                        (txid, output_index, address, amount, spent_txid)
+                        VALUES (?, ?, ?, ?, NULL)
+                    ''', (tx["txid"], i, output["address"], output["amount"]))
+                
+                # Mark inputs as spent
+                for input_utxo in tx.get("inputs", []):
+                    cursor.execute('''
+                        UPDATE utxos SET spent_txid = ? 
+                        WHERE txid = ? AND output_index = ?
+                    ''', (tx["txid"], input_utxo["txid"], input_utxo["output_index"]))
+            
+            conn.commit()
+            conn.close()
+            
+            logger.info(f"📥 Synced block {height} from peer: {block_hash[:16]}...")
+            return {"success": True, "message": f"Block {height} added"}
+            
+        except Exception as e:
+            logger.error(f"Failed to submit external block: {e}")
+            return {"success": False, "error": str(e)}
 
 class MainnetRPCHandler(BaseHTTPRequestHandler):
     """HTTP handler for mainnet RPC requests"""
