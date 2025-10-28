@@ -19,6 +19,14 @@ import base64
 import secrets
 from pathlib import Path
 
+# Import network synchronization
+try:
+    from ptc_network_sync import PTCNetworkSync
+    NETWORK_SYNC_AVAILABLE = True
+except ImportError:
+    NETWORK_SYNC_AVAILABLE = False
+    logger.warning("Network sync not available")
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -819,6 +827,14 @@ class PTCMainnetDaemon:
         self.miner = MainnetMiner(self.blockchain)
         self.rpc_server = MainnetRPCServer(self.blockchain, self.miner)
         
+        # Initialize network synchronization
+        if NETWORK_SYNC_AVAILABLE:
+            self.network_sync = PTCNetworkSync(rpc_port=19443)
+            logger.info("🌐 Network sync initialized")
+        else:
+            self.network_sync = None
+            logger.warning("⚠️  Running without network sync")
+        
         # Create initial wallet address if none exist
         if not self.blockchain.get_wallet_addresses():
             self.blockchain.create_wallet_address("default")
@@ -829,6 +845,11 @@ class PTCMainnetDaemon:
     def start(self):
         """Start the mainnet daemon"""
         logger.info("🔧 Starting PTC Mainnet services...")
+        
+        # Start network synchronization
+        if self.network_sync:
+            self.network_sync.start_sync()
+            logger.info("🌐 Network sync started - connecting to PTC network")
         
         # Start mining
         self.miner.start_mining()
@@ -844,6 +865,9 @@ class PTCMainnetDaemon:
         logger.info(f"   Mining Difficulty: {self.blockchain.get_difficulty():,}")
         logger.info(f"   Block Reward: {self.blockchain.get_current_block_reward()} PTC")
         logger.info(f"   RPC Server: http://127.0.0.1:19443")
+        if self.network_sync:
+            status = self.network_sync.get_network_status()
+            logger.info(f"   Network Peers: {status['active_peers']}/{status['peer_count']}")
         logger.info("🔒 Privacy Features: Ring Signatures ✅ Bulletproofs ✅ Stealth Addresses ✅")
         logger.info("")
         logger.info("🌐 PTC MAINNET IS LIVE!")
@@ -853,6 +877,8 @@ class PTCMainnetDaemon:
         except KeyboardInterrupt:
             logger.info("\n🛑 Stopping PTC Mainnet Daemon...")
             self.miner.stop_mining()
+            if self.network_sync:
+                self.network_sync.stop()
             httpd.shutdown()
             logger.info("✅ PTC Mainnet Daemon stopped")
 
